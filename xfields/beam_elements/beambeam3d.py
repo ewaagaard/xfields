@@ -4,11 +4,9 @@
 # ########################################### #
 
 import numpy as np
-import time
 
 import xobjects as xo
 import xtrack as xt
-import xpart as xp
 
 from ..general import _pkg_root
 
@@ -267,6 +265,41 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
 
                     **kwargs):
 
+        """
+        3D beam-beam element in the soft-Gaussian approximation.
+
+        Args:
+             phi (float): Half crossing angle in [rad]. 
+             alpha (float): Crossing plane. E.g. CMS (y-z crossing) has `alpha=pi/2` and ATLAS (x-z crossing) has `alpha=0`.
+             other_beam_q0 (float): Charge sign of opposing beam. -1 for electrons, +1 for protons or positrons.
+             scale_strength (float): Used to scale beam-beam force strength. Scales `other_beam_q0`.
+             slices_other_beam_num_particles (float array): Number of real charges per slice in the opposing bunch. Length of the array is the number of longitudinal slices.
+             slices_other_beam_{x,px,y,py,zeta,pzeta}_center (float array): Array storing the per-slice centroid variables of the opposing bunch, in the boosted accelerator frame. Length of the array is the number of longitudinal slices. 
+             flag_beamstrahlung (int): Flag to simulate beamstrahlung. 0: OFF, 1: ON (mean, only for testing), 2: ON (quantum, use this for simulations)
+             slices_other_beam_zeta_bin_width_beamstrahlung (float array): Array storing the longitudinal bin width in the unboosted accelerator frame. Length of the array is the number of longitudinal slices. Used for beamstrahlung only.
+             slices_other_beam_zeta_bin_width_star_beamstrahlung (float array): Array storing the longitudinal bin width in the boosted accelerator frame. Length of the array is the number of longitudinal slices. Used for beamstrahlung only. Obtained as slices_other_beam_zeta_bin_width_beamstrahlung/cos(phi). 
+             slices_other_beam_sqrtSigma_{135}{135}_beamstrahlung (float array): Array storing the per-slice standard deviations of x (=1), y (=3) and zeta (=5) of the opposing bunch, in the unboosted accelerator frame. Length of the array is the number of longitudinal slices. Used for beamstrahlung only. 
+             flag_bhabha (int): Flag to simulate small angle radiative Bhabha scattering. 1: ON (quantum), 0: OFF
+             compt_x_min (float): Low energy cut on virtual photon spectrum, used for Bhabha, in units of [gamma^-2] where gamma is the rel. Lorentz factor.
+             flag_beamsize_effect (int): Flag to simulate beamsize effect, used for Bhabha. 1: ON, 0: OFF. Results in ~factor 2 reduction in cross section.
+             flag_luminosity (int): Flag to record soft-Gaussian luminosity per bunch crossing in a buffer. Luminosity will be in units of [m^-2].
+             slices_other_beam_{x,px,y,py,zeta,pzeta}_center_star (float array): Array storing the per-slice centroid variables of the opposing bunch, in the unboosted accelerator frame. Length of the array is the number of longitudinal slices. 
+             slices_other_beam_Sigma_{1234}{1234} (float array): Array storing the per-slice statistical moments (variances and covariances of x (=1), px (=2), y (=3), py (=4)) of the opposing bunch, in the unboosted accelerator frame. Length of the array is the number of longitudinal slices. 
+             slices_other_beam_Sigma_{1234}{1234}_star (float array): Array storing the per-slice statistical moments (variances and covariances of x (=1), px (=2), y (=3), py (=4)) of the opposing bunch, in the boosted accelerator frame. Length of the array is the number of longitudinal slices. 
+             ref_shift_{x,px,y,py,zeta,pzeta} (float): Closed orbit shift, subtracted from each macroparticle before collision and added back after.
+             other_beam_shift_{x,px,y,py,zeta,pzeta} (float): Closed orbit shift of the opposing beam (used in weak-strong mode). Subtracted and from the opposing slice centroids before collision and added back after.
+             post_subtract_{x,px,y,py,zeta,pzeta} (float): Additional quantity that is subtracted after the beam-beam collision. Used e.g. for dipole kick.
+             min_sigma_diff (float): Round beam kick (~2x faster) is used instead of elliptical kick, if `fabs(sigma_x-sigma_y) < min_sigma_diff`.
+             threshold_singular (float): Small number used to handle singularities when transporting slice moments from interaction point (IP) to collision point (CP).
+             old_interface (dict): Dictionary containing parameters with the old interface. (obsolete)
+             config_for_update (xfields.ConfigForUpdateBeamBeamBiGaussian3D): Used for (quasi-)strong-strong beam-beam and `None` for weak-strong. See documentation of xfields.ConfigForUpdateBeamBeamBiGaussian3D.
+             _sin_phi (float): Sine of half crossing angle.
+             _cos_phi (float): Cosine of half crossing angle.
+             _tan_phi (float): Tangent of half crossing angle.
+             _sin_alpha (float): Sine of crossing plane.
+             _cos_alpha (float): Cosine of crossing plane.
+        """
+
         if '_xobject' in kwargs.keys():
             self.xoinitialize(**kwargs)
             return
@@ -340,25 +373,9 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
             self.partner_moments = self._buffer.context.nplike_lib.zeros(
                 self.config_for_update.slicer.num_slices*(1+6+10), dtype=float)
 
-        if phi is None and _sin_phi is not None:
-            self._sin_phi = _sin_phi
-            self._cos_phi = _cos_phi
-            self._tan_phi = _tan_phi
-        else:
-            if phi is None:
-                phi = 0
-            self._sin_phi = np.sin(phi)
-            self._cos_phi = np.cos(phi)
-            self._tan_phi = np.tan(phi)
-
-        if alpha is None and _sin_alpha is not None:
-            self._sin_alpha = _sin_alpha
-            self._cos_alpha = _cos_alpha
-        else:
-            if alpha is None:
-                alpha = 0
-            self._sin_alpha = np.sin(alpha)
-            self._cos_alpha = np.cos(alpha)
+        _init_alpha_phi(self, phi=phi, alpha=alpha,
+                    _sin_phi=_sin_phi, _cos_phi=_cos_phi, _tan_phi=_tan_phi,
+                    _sin_alpha=_sin_alpha, _cos_alpha=_cos_alpha)
 
         self.num_slices_other_beam = n_slices
         self.slices_other_beam_num_particles = self._arr2ctx(np.array(
@@ -693,6 +710,24 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
         self.slices_other_beam_Sigma_34_star = self._arr2ctx(self.partner_moments[15*self.num_slices_other_beam:16*self.num_slices_other_beam]) * (-1.0)
         self.slices_other_beam_Sigma_44_star = self._arr2ctx(self.partner_moments[16*self.num_slices_other_beam:17*self.num_slices_other_beam])
 
+    def _track_non_collective(self, particles, i_slices=None):
+
+            # Change reference frame
+            self.change_ref_frame(particles)
+
+            self._debug_part_after_boost = particles.copy()
+
+            i_slices = i_slices or range(len(self.slices_other_beam_zeta_center_star))
+
+            # Beam beam interaction in the boosted frame
+            for ii in i_slices:
+                self.synchro_beam_kick(particles=particles,
+                    i_slice_for_particles=ii + 0 * particles.particle_id)
+
+            # Back to lab frame
+            self.change_back_ref_frame_and_subtract_dipolar(particles)
+
+
     def _track_collective(self, particles, _force_suspend=False):
         if self.config_for_update._working_on_bunch is not None:
             # I am resuming a suspended calculation
@@ -700,7 +735,7 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
             assert self.config_for_update._working_on_bunch == particles.name
 
             # Beam beam interaction in the boosted frame
-            ret = self._apply_bb_kicks_in_boosted_frame(particles)
+            ret = self._sync_with_partner_and_apply_bb_kicks_in_boosted_frame(particles)
 
             if ret is not None:
                 return ret # PipelineStatus
@@ -743,7 +778,7 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
                 return xt.PipelineStatus(on_hold=True)
 
             # Beam beam interaction in the boosted frame
-            ret = self._apply_bb_kicks_in_boosted_frame(particles)
+            ret = self._sync_with_partner_and_apply_bb_kicks_in_boosted_frame(particles)
 
             if ret is not None:
                 return ret # PipelineStatus
@@ -752,48 +787,20 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
                 self.change_back_ref_frame_and_subtract_dipolar(particles)
                 return None
 
-    def _apply_bb_kicks_in_boosted_frame(self, particles):
+    def _sync_with_partner_and_apply_bb_kicks_in_boosted_frame(self, particles):
 
         n_slices_self_beam = self.config_for_update.slicer.num_slices
 
-        while True:
+        while True: # loop over slices
 
             # recompute and communicate slice moments; if QSS only update before first step
             if (self.config_for_update._do_update and (not self.config_for_update.quasistrongstrong
                 or self.config_for_update._i_step == 0)):
 
-                ii = 0
-                while particles.state[ii] != 1:
-                    ii += 1
-                at_turn = int(particles.at_turn[ii])
+                status = self._compute_moments_and_sync_with_partner(particles)
 
-                if self.config_for_update.pipeline_manager.is_ready_to_send(self.config_for_update.element_name,
-                                                     particles.name,
-                                                     self.config_for_update.partner_particles_name,
-                                                     at_turn,
-                                                     internal_tag=self.config_for_update._i_step):
-                    # Compute moments
-                    self.config_for_update.slicer.assign_slices(particles)  # in this the bin edges are fixed with TempSlicer
-                    self.moments = self.config_for_update.slicer.compute_moments(particles,update_assigned_slices=False)
-
-                    self.config_for_update.pipeline_manager.send_message(self.moments,
-                                                     self.config_for_update.element_name,
-                                                     particles.name,
-                                                     self.config_for_update.partner_particles_name,
-                                                     at_turn,
-                                                     internal_tag=self.config_for_update._i_step)
-                if self.config_for_update.pipeline_manager.is_ready_to_recieve(self.config_for_update.element_name,
-                                        self.config_for_update.partner_particles_name,
-                                        particles.name,
-                                        internal_tag=self.config_for_update._i_step):
-                    self.config_for_update.pipeline_manager.recieve_message(self.partner_moments,
-                                        self.config_for_update.element_name,
-                                        self.config_for_update.partner_particles_name,
-                                        particles.name,
-                                        internal_tag=self.config_for_update._i_step)
-                    self.update_from_received_moments()
-                else:
-                    return xt.PipelineStatus(on_hold=True)
+                if status is not None:
+                    return status # pipeline hold
 
             # compute interacting other beam slice ID
             self.config_for_update._other_beam_slice_index_for_particles[:] =(
@@ -810,6 +817,42 @@ class BeamBeamBiGaussian3D(xt.BeamElement):
                 break
 
         return None
+
+    def _compute_moments_and_sync_with_partner(self, particles):
+
+        # Find at_turn from the first active particle
+        ii = 0
+        while particles.state[ii] != 1:
+            ii += 1
+        at_turn = int(particles.at_turn[ii])
+
+        pipeline_manager = self.config_for_update.pipeline_manager
+
+        if pipeline_manager.is_ready_to_send(self.config_for_update.element_name,
+                                                particles.name,
+                                                self.config_for_update.partner_particles_name,
+                                                at_turn,
+                                                internal_tag=self.config_for_update._i_step):
+            # Compute moments
+            self.config_for_update.slicer.assign_slices(particles)  # in this the bin edges are fixed with TempSlicer
+            self.moments = self.config_for_update.slicer.compute_moments(particles,update_assigned_slices=False)
+
+            pipeline_manager.send_message(self.moments,
+                                                self.config_for_update.element_name,
+                                                particles.name,
+                                                self.config_for_update.partner_particles_name,
+                                                at_turn,
+                                                internal_tag=self.config_for_update._i_step)
+        if pipeline_manager.is_ready_to_receive(self.config_for_update.element_name,
+                                self.config_for_update.partner_particles_name,
+                                particles.name,
+                                internal_tag=self.config_for_update._i_step):
+            pipeline_manager.receive_message(self.partner_moments, self.config_for_update.element_name,
+                                             self.config_for_update.partner_particles_name, particles.name,
+                                             internal_tag=self.config_for_update._i_step)
+            self.update_from_received_moments()
+        else:
+            return xt.PipelineStatus(on_hold=True)
 
     @property
     def sin_phi(self):
@@ -1468,3 +1511,26 @@ class ConfigForUpdateBeamBeamBiGaussian3D:
         self._working_on_bunch = None
         self._particles_slice_index = None
 
+def _init_alpha_phi(bb, phi=None, alpha=None,
+                    _sin_phi=None, _cos_phi=None, _tan_phi=None,
+                    _sin_alpha=None, _cos_alpha=None):
+
+    if phi is None and _sin_phi is not None:
+        bb._sin_phi = _sin_phi
+        bb._cos_phi = _cos_phi
+        bb._tan_phi = _tan_phi
+    else:
+        if phi is None:
+            phi = 0
+        bb._sin_phi = np.sin(phi)
+        bb._cos_phi = np.cos(phi)
+        bb._tan_phi = np.tan(phi)
+
+    if alpha is None and _sin_alpha is not None:
+        bb._sin_alpha = _sin_alpha
+        bb._cos_alpha = _cos_alpha
+    else:
+        if alpha is None:
+            alpha = 0
+        bb._sin_alpha = np.sin(alpha)
+        bb._cos_alpha = np.cos(alpha)
